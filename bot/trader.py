@@ -1,7 +1,10 @@
 import json
 import logging
 import os
+import threading
 import time
+from collections import deque
+from datetime import datetime
 from decimal import Decimal, ROUND_DOWN
 
 from .strategy import BUY, SELL, calculate_rsi, get_signal
@@ -31,6 +34,11 @@ class Trader:
         self.cfg = config
         self.sleep = sleep
         self.state = self._load_state()
+        self.state.setdefault("trades", [])
+        self.stop_event = threading.Event()
+        self.running = False
+        self.lock = threading.Lock()
+        self.last = {"price": None, "rsi": {}, "signal": None, "updated": None, "error": None}
 
     # ---- state ----
     def _load_state(self):
@@ -40,7 +48,12 @@ class Trader:
                     return json.load(f)
             except (OSError, ValueError) as exc:
                 log.error("Cannot read state file: %s", exc)
-        return {"in_position": False, "qty": 0.0, "entry_price": 0.0}
+        return {"in_position": False, "qty": 0.0, "entry_price": 0.0, "trades": []}
+
+    def _record(self, side, qty, price):
+        t = {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "side": side,
+             "qty": qty, "price": price, "dry_run": self.cfg.dry_run}
+        self.state["trades"] = (self.state.get("trades", []) + [t])[-50:]
 
     def _save_state(self):
         with open(self.cfg.state_file, "w") as f:
@@ -79,7 +92,8 @@ class Trader:
             quote = float(order.get("cummulativeQuoteQty", 0))
             price = quote / qty if qty else price
             log.info("BUY filled: %s qty=%s avg=%.2f", order.get("orderId"), qty, price)
-        self.state = {"in_position": True, "qty": qty, "entry_price": price}
+        self.state.update({"in_position": True, "qty": qty, "entry_price": price})
+        self._record(BUY, qty, price)
         self._save_state()
 
     def sell(self, price):
@@ -93,7 +107,8 @@ class Trader:
             log.info("SELL filled: %s qty=%s", order.get("orderId"), q)
         pnl = (price - self.state["entry_price"]) * qty
         log.info("Position closed, approx PnL: %.4f", pnl)
-        self.state = {"in_position": False, "qty": 0.0, "entry_price": 0.0}
+        self._record(SELL, qty, price)
+        self.state.update({"in_position": False, "qty": 0.0, "entry_price": 0.0})
         self._save_state()
 
     def step(self):
@@ -102,6 +117,10 @@ class Trader:
         signal = get_signal(rsi, self.state["in_position"],
                             self.cfg.rsi_buy, self.cfg.rsi_sell)
         price = closes[-1] if closes else 0.0
+        rsis = {p: calculate_rsi(closes, p) for p in sorted({6, 12, 14, 24, self.cfg.rsi_period})}
+        with self.lock:
+            self.last.update(price=price, rsi=rsis, signal=signal, error=None,
+                             updated=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         log.info("%s price=%.2f RSI=%s signal=%s in_position=%s", self.cfg.symbol,
                  price, f"{rsi:.2f}" if rsi is not None else "n/a",
                  signal, self.state["in_position"])
@@ -111,13 +130,44 @@ class Trader:
             self.sell(price)
         return signal
 
+    def stop(self):
+        log.info("Stop requested")
+        self.stop_event.set()
+
+    def status(self, log_lines=()):
+        with self.lock:
+            last = dict(self.last)
+        if self.running:
+            mode = "dry_run" if self.cfg.dry_run else "trading"
+        else:
+            mode = "stopped"
+        return {
+            "status": mode,
+            "testnet": self.cfg.use_testnet, "dry_run": self.cfg.dry_run,
+            "symbol": self.cfg.symbol, "interval": self.cfg.interval,
+            "strategy_period": self.cfg.rsi_period,
+            "price": last["price"],
+            "rsi": {str(k): (round(v, 2) if v is not None else None) for k, v in last["rsi"].items()},
+            "signal": last["signal"], "error": last["error"],
+            "position": ({"qty": self.state["qty"], "entry_price": self.state["entry_price"]}
+                         if self.state.get("in_position") else None),
+            "trades": self.state.get("trades", [])[-10:][::-1],
+            "logs": list(log_lines)[-20:],
+            "updated": last["updated"],
+        }
+
     def run(self):
         log.info("Starting bot: testnet=%s dry_run=%s", self.cfg.use_testnet, self.cfg.dry_run)
-        while True:
-            try:
-                self.step()
-            except KeyboardInterrupt:
-                raise
-            except Exception as exc:
-                log.exception("Step failed: %s", exc)
-            self.sleep(self.cfg.poll_seconds)
+        self.running = True
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    self.step()
+                except Exception as exc:
+                    log.exception("Step failed: %s", exc)
+                    with self.lock:
+                        self.last["error"] = str(exc)
+                self.stop_event.wait(self.cfg.poll_seconds)
+        finally:
+            self.running = False
+            log.info("Bot stopped")

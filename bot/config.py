@@ -23,6 +23,8 @@ class Config:
     poll_seconds: int = 60
     state_file: str = "state.json"
     log_file: str = "bot.log"
+    dashboard_enabled: bool = True
+    dashboard_port: int = 8000
 
     @classmethod
     def from_env(cls):
@@ -46,4 +48,6 @@ class Config:
             poll_seconds=int(e("POLL_SECONDS", "60")),
             state_file=e("STATE_FILE", "state.json"),
             log_file=e("LOG_FILE", "bot.log"),
+            dashboard_enabled=_bool(e("DASHBOARD_ENABLED"), True),
+            dashboard_port=int(e("DASHBOARD_PORT", "8000")),
         )
