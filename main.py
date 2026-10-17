@@ -5,6 +5,7 @@ import sys
 # allow running as `python my-first-project-main/main.py` from any directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from bot.binance_client import Client  # noqa: E402
 from bot.config import Config  # noqa: E402
 from bot.dashboard import BufferHandler, start_dashboard  # noqa: E402
 from bot.trader import Trader  # noqa: E402
@@ -20,8 +21,12 @@ def main():
         sys.exit("BINANCE_API_KEY/BINANCE_API_SECRET required when DRY_RUN=false")
     if not cfg.use_testnet and not cfg.dry_run:
         logging.warning("LIVE TRADING WITH REAL FUNDS ENABLED")
-    from binance.client import Client
-    client = Client(cfg.api_key or None, cfg.api_secret or None, testnet=cfg.use_testnet)
+    client = Client(cfg.api_key, cfg.api_secret, testnet=cfg.use_testnet)
+    if cfg.api_key and cfg.api_secret:
+        try:
+            client.sync_time()
+        except Exception as exc:
+            logging.warning("Server time sync failed: %s", exc)
     trader = Trader(client, cfg)
     server = None
     if cfg.dashboard_enabled:

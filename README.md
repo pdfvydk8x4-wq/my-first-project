@@ -10,10 +10,13 @@
 - Никогда не публикуйте файл `.env` и не давайте API-ключам права на вывод средств.
 
 ## Установка
+Бот не использует python-binance и pycryptodome: запросы к Binance делает маленький клиент
+`bot/binance_client.py` на стандартной библиотеке Python (urllib, hmac). Поэтому он работает в a-Shell на iPhone.
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements.txt          # только python-dotenv (необязательно)
 cp .env.example .env           # затем впишите свои ключи в .env
 ```
 
@@ -44,6 +47,7 @@ python main.py
 
 ## Тесты
 ```bash
+pip install -r requirements-dev.txt
 pytest -v
 ```
 Тесты проверяют расчёт RSI и логику сигналов с имитацией биржи, без сети и ключей.
