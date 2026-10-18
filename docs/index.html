@@ -1,0 +1,63 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10"><title>RSI · BTCUSDT</title><style>
+*{box-sizing:border-box}body{margin:0;padding:16px 14px 28px;background:#0b0d10;color:#e8eaed;
+font-family:-apple-system,BlinkMacSystemFont,sans-serif;-webkit-font-smoothing:antialiased}
+.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:8px}
+.badge{font-size:20px;font-weight:800;letter-spacing:.5px;padding:12px 16px;border-radius:14px}
+.g{background:#12351f;color:#3ddc84}.y{background:#3a3110;color:#f5c542}.r{background:#3d1416;color:#ff5c5c}.n{background:#22262b;color:#9aa0a6}
+.tag{font-size:11px;font-weight:700;padding:4px 8px;border-radius:8px;background:#22262b;color:#9aa0a6;white-space:nowrap}
+.sym{color:#9aa0a6;font-size:13px;font-weight:600;letter-spacing:1px}
+.price{font-size:46px;font-weight:800;letter-spacing:-1px;margin:2px 0 4px;font-variant-numeric:tabular-nums}
+.sub{color:#6b7178;font-size:12px}
+.cards{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:16px 0}
+.card{background:#14171b;border-radius:14px;padding:12px}
+.card .l{color:#9aa0a6;font-size:12px;font-weight:600}.card .v{font-size:32px;font-weight:800;margin:4px 0 8px;font-variant-numeric:tabular-nums}
+.card.s{outline:1px solid #2f353c}
+.bar{position:relative;height:4px;background:#2a2f35;border-radius:2px}.bar i{position:absolute;left:0;top:0;bottom:0;border-radius:2px}
+.bar b{position:absolute;top:-3px;width:1px;height:10px;background:#555}
+.cg{color:#3ddc84}.cr{color:#ff5c5c}.cn{color:#e8eaed}
+.note{color:#6b7178;font-size:12px;line-height:1.4;background:#14171b;border-radius:14px;padding:12px}
+</style></head><body>
+<div class="top"><div id="badge" class="badge n">ЗАГРУЗКА…</div><span class="tag">ТОЛЬКО СИГНАЛЫ</span></div>
+<div class="sym">BTCUSDT · 15m</div><div class="price" id="price">—</div><div class="sub" id="sub">—</div>
+<div class="cards" id="cards"></div>
+<div class="note">Эта страница только показывает рыночные сигналы RSI по данным Binance и <b>не управляет ботом</b>. Покупка при RSI 14 &lt; 30, продажа при RSI 14 &gt; 70.</div>
+<script>
+const SYMBOL='BTCUSDT',INTERVAL='15m',PERIODS=[6,12,14,24],STRAT=14;
+const URLS=['https://data-api.binance.vision/api/v3/klines','https://api.binance.com/api/v3/klines'];
+// Wilder RSI, identical to bot/strategy.py calculate_rsi
+function calcRSI(closes,period){
+  if(closes.length<period+1)return null;
+  const g=[],l=[];
+  for(let i=1;i<closes.length;i++){const d=closes[i]-closes[i-1];g.push(Math.max(d,0));l.push(Math.max(-d,0));}
+  let ag=0,al=0;for(let i=0;i<period;i++){ag+=g[i];al+=l[i];}ag/=period;al/=period;
+  for(let i=period;i<g.length;i++){ag=(ag*(period-1)+g[i])/period;al=(al*(period-1)+l[i])/period;}
+  if(al===0)return ag>0?100:50;
+  return 100-100/(1+ag/al);
+}
+async function fetchKlines(){
+  let err;for(const u of URLS){try{
+    const r=await fetch(`${u}?symbol=${SYMBOL}&interval=${INTERVAL}&limit=200`,{cache:'no-store'});
+    if(!r.ok)throw new Error('HTTP '+r.status);return await r.json();}catch(e){err=e;}}
+  throw err;
+}
+const f=(v,d=2)=>v==null?'—':Number(v).toLocaleString('ru-RU',{minimumFractionDigits:d,maximumFractionDigits:d});
+const col=v=>v==null?'cn':v<30?'cg':v>70?'cr':'cn';
+const bg=v=>v==null?'#555':v<30?'#3ddc84':v>70?'#ff5c5c':'#9aa0a6';
+async function load(){
+  try{
+    const kl=await fetchKlines();
+    const all=kl.map(k=>parseFloat(k[4])), closes=all.slice(0,-1); // closed candles only, like the bot
+    const rsi={};PERIODS.forEach(p=>rsi[p]=calcRSI(closes,p));
+    const s=rsi[STRAT];let t='В ОЖИДАНИИ',c='y';
+    if(s!=null&&s<30){t='СИГНАЛ: ПОКУПКА';c='g'}else if(s!=null&&s>70){t='СИГНАЛ: ПРОДАЖА';c='r'}
+    badge.textContent=t;badge.className='badge '+c;
+    price.textContent=f(all[all.length-1]);
+    sub.textContent='Обновлено: '+new Date().toLocaleTimeString('ru-RU');
+    cards.innerHTML=PERIODS.map(p=>{const v=rsi[p];return `<div class="card${p==STRAT?' s':''}"><div class="l">RSI ${p}${p==STRAT?' · стратегия':''}</div><div class="v ${col(v)}">${f(v,1)}</div><div class="bar"><i style="width:${v==null?0:v}%;background:${bg(v)}"></i><b style="left:30%"></b><b style="left:70%"></b></div></div>`}).join('');
+    document.body.dataset.loaded='1';
+  }catch(e){badge.textContent='НЕТ ДАННЫХ';badge.className='badge n';sub.textContent='Ошибка загрузки: '+e.message;}
+}
+load();setInterval(load,10000);
+</script></body></html>
